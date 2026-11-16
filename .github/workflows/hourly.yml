@@ -1,0 +1,68 @@
+name: Hourly
+
+# Calls a scheduled-jobs endpoint once an hour (at :05 UTC) and on demand (Run workflow). The
+# address and the key are repository secrets (JOBS_URL, CRON_SECRET), sent only in the request.
+# This repository is public, so its logs are too: they show the HTTP status, never the answer.
+
+on:
+  schedule:
+    - cron: "5 * * * *"
+    # Keepalive: the 1st of each month, 04:20 UTC (job "keepalive" below)
+    - cron: "20 4 1 * *"
+  workflow_dispatch:
+
+permissions: {}
+
+# One call at a time (a run still going when the next is due: the next waits)
+concurrency:
+  group: hourly
+  cancel-in-progress: false
+
+jobs:
+  call:
+    if: github.event_name == 'workflow_dispatch' || github.event.schedule == '5 * * * *'
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - name: Call the scheduled jobs
+        env:
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+          JOBS_URL: ${{ secrets.JOBS_URL }}
+        run: |
+          if [ -z "$CRON_SECRET" ] || [ -z "$JOBS_URL" ]; then
+            echo "::error::Set the repository secrets CRON_SECRET and JOBS_URL"
+            exit 1
+          fi
+          # 70 s at most (the endpoint answers within 60 s); no answer or error text printed
+          status=$(curl --silent --max-time 70 --output /dev/null --write-out "%{http_code}" \
+            -X POST -H "Authorization: Bearer $CRON_SECRET" "$JOBS_URL") || status="000"
+          echo "HTTP $status"
+          if [ "$status" -lt 200 ] || [ "$status" -ge 300 ]; then
+            echo "::error::The call answered HTTP $status (000: no answer)"
+            exit 1
+          fi
+
+  # GitHub turns a public repository's schedules off after 60 days without activity (a commit on
+  # the default branch). Monthly: an empty commit (no file added or changed) and the workflow
+  # enabled again through the API
+  keepalive:
+    if: github.event.schedule == '20 4 1 * *'
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    permissions:
+      contents: write
+      actions: write
+    steps:
+      - name: Keep the schedule on
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          BRANCH: ${{ github.ref_name }}
+        run: |
+          head=$(gh api "repos/$REPO/commits/$BRANCH" -q .sha)
+          tree=$(gh api "repos/$REPO/git/commits/$head" -q .tree.sha)
+          commit=$(gh api "repos/$REPO/git/commits" -f message="Keepalive: the schedule stays on" \
+            -f tree="$tree" -f "parents[]=$head" -q .sha)
+          gh api -X PATCH "repos/$REPO/git/refs/heads/$BRANCH" -f sha="$commit" --silent
+          gh api -X PUT "repos/$REPO/actions/workflows/hourly.yml/enable" --silent
+          echo "Empty commit $commit on $BRANCH; the workflow enabled"
