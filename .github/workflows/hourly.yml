@@ -1,12 +1,13 @@
 name: Hourly
 
-# Calls a scheduled-jobs endpoint once an hour (at :05 UTC) and on demand (Run workflow). The
+# Calls a scheduled-jobs endpoint four times an hour (at :07, :22, :37 and :52 UTC, away from the
+# start of the hour, when GitHub delays or drops scheduled runs) and on demand (Run workflow). The
 # address and the key are repository secrets (JOBS_URL, CRON_SECRET), sent only in the request.
 # This repository is public, so its logs are too: they show the HTTP status, never the answer.
 
 on:
   schedule:
-    - cron: "5 * * * *"
+    - cron: "7,22,37,52 * * * *"
     # Keepalive: the 1st of each month, 04:20 UTC (job "keepalive" below)
     - cron: "20 4 1 * *"
   workflow_dispatch:
@@ -20,7 +21,7 @@ concurrency:
 
 jobs:
   call:
-    if: github.event_name == 'workflow_dispatch' || github.event.schedule == '5 * * * *'
+    if: github.event_name == 'workflow_dispatch' || github.event.schedule == '7,22,37,52 * * * *'
     runs-on: ubuntu-latest
     timeout-minutes: 3
     steps:
